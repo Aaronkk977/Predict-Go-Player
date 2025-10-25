@@ -22,6 +22,6 @@ target_link_libraries(
     environment
     config
     utils
-    # ale::ale-lib  # Not needed for Go
+    ale::ale-lib
     ${OpenCV_LIBS}
 )

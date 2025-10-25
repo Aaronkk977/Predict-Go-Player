@@ -13,7 +13,7 @@ usage()
     exit 1
 }
 
-image_name=docker.io/kds285/minizero:latest
+image_name=kds285/minizero:latest
 container_volume="-v .:/workspace"
 container_argumenets=""
 while :; do
