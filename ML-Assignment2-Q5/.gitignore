@@ -1,0 +1,19 @@
+# execute and library file
+build/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Trained models
+*.pth
+*.pt
+models/
+
+# Others
+.vscode/
+*.log
+
+# BUT keep the config file!
+!conf.cfg
