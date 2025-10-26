@@ -7,10 +7,15 @@ echo "======================================"
 echo "Go Player Style Detection - Training"
 echo "======================================"
 
+# Change to the code directory
+cd "$(dirname "$0")/../style_detection/code" || exit 1
+echo "Working directory: $(pwd)"
+echo ""
+
 # Configuration
 RUN_ID="style_model_$(date +%Y%m%d_%H%M%S)"
 GAME_TYPE="go"
-CONF_FILE="/workspace/ML-Assignment2-Q5/conf.cfg"
+CONF_FILE="../../conf.cfg"
 MODELS_DIR="./models"
 SAVE_EVERY=100
 BACKUP_EVERY=500
@@ -24,6 +29,7 @@ echo ""
 # Verify config file exists
 if [ ! -f "$CONF_FILE" ]; then
     echo "ERROR: Config file not found: $CONF_FILE"
+    echo "Looking at: $(pwd)/$CONF_FILE"
     exit 1
 fi
 
@@ -42,6 +48,7 @@ echo ""
 mkdir -p $MODELS_DIR
 
 # Run training
+echo "Starting training..."
 python3 train.py $GAME_TYPE $RUN_ID \
     -c $CONF_FILE \
     -m $MODELS_DIR \
@@ -49,8 +56,23 @@ python3 train.py $GAME_TYPE $RUN_ID \
     -b $BACKUP_EVERY \
     -ve $VALIDATE_EVERY
 
+EXIT_CODE=$?
+
 echo ""
-echo "======================================"
-echo "Training completed!"
-echo "Model saved in: $MODELS_DIR"
-echo "======================================"
+if [ $EXIT_CODE -eq 0 ]; then
+    echo "======================================"
+    echo "✅ Training completed successfully!"
+    echo "======================================"
+    echo "Model saved in: $MODELS_DIR"
+    echo "Run ID: $RUN_ID"
+    echo ""
+    echo "To test the model, run:"
+    echo "  cd /workspace/ML-Assignment2-Q5/style_detection/code"
+    echo "  python3 testing.py go -c ../../conf.cfg -m models/${RUN_ID}_final.pt"
+else
+    echo "======================================"
+    echo "❌ Training failed with exit code: $EXIT_CODE"
+    echo "======================================"
+fi
+
+exit $EXIT_CODE

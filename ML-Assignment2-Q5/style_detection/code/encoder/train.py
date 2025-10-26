@@ -221,20 +221,24 @@ def train(run_id: str, game_type: str, data_dir: str, validate_data_dir: str, mo
     
     # Dataset yields one player at a time, DataLoader will batch them
     # Use default collate_fn which will stack tensors along batch dimension
-    num_workers = 0  # Set to 0 for initial testing to avoid multiprocessing issues
+    
+    # Setup device (GPU if available)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"🚀 Using device: {device}")
+    
+    # Enable GPU optimizations if CUDA is available
+    use_gpu = torch.cuda.is_available()
+    num_workers = 2 if use_gpu else 0  # Use workers for GPU
     
     data_loader = DataLoader(
         dataset, 
         batch_size=style_py.get_players_per_batch(),
         num_workers=num_workers,
-        persistent_workers=False,  # Only True if num_workers > 0
-        pin_memory=False,  # Can enable if using GPU and stable
+        persistent_workers=True if num_workers > 0 else False,
+        pin_memory=use_gpu,  # Enable pin_memory for GPU
         drop_last=False  # Keep incomplete batches at the end
     )
     data_loader_iterator = iter(data_loader)
-
-    # Setup device (GPU if available)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Create model and optimizer
     model = Encoder(device, conf_file, game_type)
@@ -243,6 +247,10 @@ def train(run_id: str, game_type: str, data_dir: str, validate_data_dir: str, mo
     if torch.cuda.device_count() > 1:
         multi_gpu = True
         model = torch.nn.DataParallel(model)
+        print(f"🔥 Using {torch.cuda.device_count()} GPUs with DataParallel")
+    elif torch.cuda.is_available():
+        print(f"🔥 Using single GPU: {torch.cuda.get_device_name(0)}")
+    
     model.to(device)
 
     model.train()
@@ -256,10 +264,17 @@ def train(run_id: str, game_type: str, data_dir: str, validate_data_dir: str, mo
     step = 0
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-4)
     
-    print(f"Starting training for {style_py.get_training_step()} steps")
+    print(f"\n{'='*60}")
+    print(f"🎯 Starting training for {style_py.get_training_step()} steps")
+    print(f"{'='*60}")
     print(f"Board size: {board_size_h}x{board_size_w}")
     print(f"Players per batch: {style_py.get_players_per_batch()}")
     print(f"Games per player: {style_py.get_games_per_player()}")
+    print(f"Input channels: {style_py.get_nn_num_input_channels()}")
+    print(f"N frames: {style_py.get_n_frames()}")
+    print(f"DataLoader workers: {num_workers}")
+    print(f"Pin memory: {use_gpu}")
+    print(f"{'='*60}\n")
     
     while step < style_py.get_training_step():
         step = step + 1
