@@ -1,8 +1,8 @@
 ML model to predicting Go players' style.
 
-## 🚀 快速開始
+## 🚀 Quick Start
 
-### 步驟 1: 主機端 - 啟動 Docker 容器
+### Step 1: 主機端 - 啟動 Docker 容器
 
 ```bash
 cd /tmp2/b12902115/Predict-Go-Player/ML-Assignment2-Q5
@@ -16,7 +16,7 @@ docker pull docker.io/kds285/strength-detection:latest
 ./scripts/start-container.sh      # CPU 版本
 ```
 
-### 步驟 2: 容器內 - 編譯 C++ 後端
+### Step 2: 容器內 - 編譯 C++ 後端
 
 ```bash
 cd /workspace/ML-Assignment2-Q5
@@ -24,7 +24,7 @@ cd /workspace/ML-Assignment2-Q5
 ./scripts/build.sh go # Compile
 ```
 
-### 步驟 3: 容器內 - 開始訓練
+### Step 3: 容器內 - 開始訓練
 
 ```bash
 ./scripts/run_training.sh
