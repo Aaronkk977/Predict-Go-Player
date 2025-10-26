@@ -48,23 +48,43 @@ void DataLoader::loadDataFromFile(const std::string& file_name)
 {
     std::cerr << "Read " << file_name << "..." << std::endl;
     std::ifstream fin(file_name, std::ifstream::in);
+    
+    if (!fin.is_open()) {
+        std::cerr << "ERROR: Cannot open file: " << file_name << std::endl;
+        return;
+    }
 
     std::string player_name;
     std::getline(fin, player_name); // The first line in Sgf
+    std::cerr << "DEBUG: Player name from file: '" << player_name << "'" << std::endl;
+    
+    int sgf_count = 0;
+    int success_count = 0;
 
     for (std::string content; std::getline(fin, content);) {
+        sgf_count++;
         EnvironmentLoader env_loader;
-        if (!strength_detection::parseSGFToEnvironmentLoader(content, env_loader)) { continue; }
+        if (!strength_detection::parseSGFToEnvironmentLoader(content, env_loader)) { 
+            std::cerr << "DEBUG: Failed to parse SGF line " << sgf_count << std::endl;
+            continue; 
+        }
 
         std::string PB_name = env_loader.getTag("PB");
         std::string PW_name = env_loader.getTag("PW");
 
         if (player_name == PB_name) {
             env_loaders_[PB_name].push_back(env_loader);
+            success_count++;
         } else if (player_name == PW_name) {
             env_loaders_[PW_name].push_back(env_loader);
+            success_count++;
+        } else {
+            std::cerr << "DEBUG: Name mismatch - player_name: '" << player_name << "'" << std::endl;
         }
     }
+    
+    std::cerr << "DEBUG: Processed " << sgf_count << " SGF lines, " << success_count << " successful" << std::endl;
+    std::cerr << "DEBUG: Total players in map: " << env_loaders_.size() << std::endl;
 }
 
 std::vector<float> DataLoader::calculateGameFeatures(int player_num, int game_id, int start, bool is_train)

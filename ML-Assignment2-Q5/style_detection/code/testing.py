@@ -60,14 +60,22 @@ class style_detection:
         """Load all SGF files from directory (600 players)"""
         print('Start reading SGF files from:', sgf_dir)
         print(f"[{time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())}]")
+        print(f"DEBUG: Players before loading: {self.data_loader.get_num_of_player()}")
 
         for i in range(600):
-            sgf_path = sgf_dir + "/player" + str(i + 1) + ".sgf"
+            # Test set uses player001.sgf format (3-digit padding)
+            sgf_path = sgf_dir + "/player" + str(i + 1).zfill(3) + ".sgf"
             self.data_loader.load_data_from_file(sgf_path)
             if (i + 1) % 100 == 0:
                 print(f"  Loaded {i + 1}/600 players")
-
-        print('Finished reading SGF files')
+                print(f"  DEBUG: Current player count: {self.data_loader.get_num_of_player()}")
+        
+        # Check immediately after loading
+        self.data_loader.Check_Sgf()  # Print debug info from C++
+        
+        final_count = self.data_loader.get_num_of_player()
+        print(f'Finished reading SGF files')
+        print(f"DEBUG: Final player count: {final_count}")
         print(f"[{time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())}]")
 
     def load_model(self, model_path):
@@ -151,15 +159,22 @@ class style_detection:
             if (player_id + 1) % 50 == 0:
                 print(f"  Processed {player_id + 1}/{num_players} players")
         
-        # Stack all embeddings
-        all_embeddings = torch.cat(embeddings_list, dim=0)  # (600, 128)
+    # Stack all embeddings
+    all_embeddings = torch.cat(embeddings_list, dim=0)  # (num_players, 128)
         
-        if is_query:
-            self.query_embeddings = all_embeddings
-            print(f"Query embeddings shape: {self.query_embeddings.shape}")
-        else:
-            self.cand_embeddings = all_embeddings
-            print(f"Candidate embeddings shape: {self.cand_embeddings.shape}")
+        # Simple diagnostics: count zero-norm embeddings (can cause degenerate similarities)
+        with torch.no_grad():
+            norms = torch.norm(all_embeddings, p=2, dim=1)
+            zero_count = int((norms == 0).sum().item())
+            total = all_embeddings.shape[0]
+            if is_query:
+                self.query_embeddings = all_embeddings
+                print(f"Query embeddings shape: {self.query_embeddings.shape}")
+                print(f"[Diag] Query zero-norm embeddings: {zero_count}/{total}")
+            else:
+                self.cand_embeddings = all_embeddings
+                print(f"Candidate embeddings shape: {self.cand_embeddings.shape}")
+                print(f"[Diag] Candidate zero-norm embeddings: {zero_count}/{total}")
 
     def compute_similarity_and_save(self, output_path="submission.csv"):
         """
@@ -168,26 +183,39 @@ class style_detection:
         """
         print("\nComputing similarities...")
         
-        # Normalize embeddings for cosine similarity
-        query_norm = F.normalize(self.query_embeddings, p=2, dim=1)
-        cand_norm = F.normalize(self.cand_embeddings, p=2, dim=1)
+        # Validate embeddings
+        if self.query_embeddings is None or self.cand_embeddings is None:
+            raise RuntimeError("Embeddings not computed. Run inference for query and candidate first.")
+
+        num_queries = self.query_embeddings.shape[0]
+        num_cands = self.cand_embeddings.shape[0]
+        print(f"Embeddings: queries={num_queries}, candidates={num_cands}")
+        if num_queries == 0 or num_cands == 0:
+            raise RuntimeError("No embeddings available to compute similarity.")
+
+        # Normalize embeddings for cosine similarity (add eps to avoid NaNs on zero vectors)
+        query_norm = F.normalize(self.query_embeddings, p=2, dim=1, eps=1e-12)
+        cand_norm = F.normalize(self.cand_embeddings, p=2, dim=1, eps=1e-12)
         
-        # Compute similarity matrix (600 x 600)
+        # Compute similarity matrix (num_queries x num_cands)
         similarity_matrix = torch.mm(query_norm, cand_norm.t())
+        
+        # Replace NaN/Inf values (can appear if any degenerate vectors slipped through)
+        similarity_matrix = torch.nan_to_num(similarity_matrix, nan=-1.0, posinf=1.0, neginf=-1.0)
         
         # For each query, find the most similar candidate
         predictions = []
-        for query_id in range(600):
+        for query_id in range(num_queries):
             similarities = similarity_matrix[query_id]
             most_similar_cand = torch.argmax(similarities).item()
             predictions.append((query_id + 1, most_similar_cand + 1))
         
-        # Save to CSV
+        # Save to CSV (competition format: id,label)
         with open(output_path, 'w', newline='') as f:
             writer = csv.writer(f)
-            writer.writerow(['query', 'candidate'])  # header
+            writer.writerow(['id', 'label'])  # header
             for query_id, cand_id in predictions:
-                writer.writerow([f"player{query_id}", f"player{cand_id}"])
+                writer.writerow([query_id, cand_id])
         
         print(f"Saved predictions to {output_path}")
         print(f"Total predictions: {len(predictions)}")
@@ -195,12 +223,15 @@ class style_detection:
     def testing(self, model_path):
         """Complete testing procedure"""
         with torch.no_grad():
+            # Load model first
+            self.load_model(model_path=model_path)
+            
             # Load and process query set
             print("\n" + "="*60)
             print("PHASE 1: Processing Query Set")
             print("="*60)
-            self.read_sgf(sgf_dir="../../data_set/test_set/query_set")
-            self.load_model(model_path=model_path)
+            self.read_sgf(sgf_dir="../../../data_set/test_set/query_set")
+            print(f"DEBUG: Number of players loaded: {self.data_loader.get_num_of_player()}")
             self.inference(self.data_loader, is_query=True)
 
             # Clear SGF data
@@ -211,7 +242,7 @@ class style_detection:
             print("\n" + "="*60)
             print("PHASE 2: Processing Candidate Set")
             print("="*60)
-            self.read_sgf(sgf_dir="../../data_set/test_set/cand_set")
+            self.read_sgf(sgf_dir="../../../data_set/test_set/cand_set")
             self.inference(self.data_loader, is_query=False)
 
             # Clear again
@@ -222,7 +253,7 @@ class style_detection:
             print("\n" + "="*60)
             print("PHASE 3: Computing Similarity and Generating Submission")
             print("="*60)
-            self.compute_similarity_and_save("submission.csv")
+            self.compute_similarity_and_save("../../../submission.csv")
             
             print("\n" + "="*60)
             print("TESTING COMPLETED!")
