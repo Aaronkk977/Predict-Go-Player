@@ -7,6 +7,9 @@ from encoder.model import Encoder
 import sys
 import time
 import csv
+import os
+import io
+import contextlib
 import torch.nn.functional as F
 sys.path.append("../style_detection/")
 
@@ -33,7 +36,6 @@ class style_detection:
         self.conf_file = conf_file
         
         # Import C++ module
-        import os
         build_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..', 'build', game_type))
         if build_path not in sys.path:
             sys.path.insert(0, build_path)
@@ -121,6 +123,7 @@ class style_detection:
         
         for player_id in range(num_players):
             player_embeddings = []
+            failed_count = 0
             
             # Process each game for this player
             for game_id in range(100):  # 100 games per player
@@ -145,22 +148,28 @@ class style_detection:
                     player_embeddings.append(embedding.cpu())
                 
                 except Exception as e:
-                    # Skip if game cannot be processed
+                    # Track failures for debugging
+                    failed_count += 1
+                    if failed_count == 1 and player_id < 3:  # Print first few failures
+                        print(f"  [Warn] Player {player_id} game {game_id} failed: {type(e).__name__}")
                     continue
             
             if len(player_embeddings) > 0:
                 # Average embeddings across all games for this player
                 player_embedding = torch.stack(player_embeddings).mean(dim=0)
                 embeddings_list.append(player_embedding)
+                if failed_count > 50:
+                    print(f"  [Warn] Player {player_id}: only {len(player_embeddings)}/100 games succeeded")
             else:
-                # If no valid games, use zero embedding
+                # If no valid games, use zero embedding (will be caught by diagnostics)
                 embeddings_list.append(torch.zeros(1, 128))
+                print(f"  [ERROR] Player {player_id}: ALL games failed! Using zero embedding.")
             
             if (player_id + 1) % 50 == 0:
                 print(f"  Processed {player_id + 1}/{num_players} players")
         
-    # Stack all embeddings
-    all_embeddings = torch.cat(embeddings_list, dim=0)  # (num_players, 128)
+        # Stack all embeddings
+        all_embeddings = torch.cat(embeddings_list, dim=0)  # (num_players, 128)
         
         # Simple diagnostics: count zero-norm embeddings (can cause degenerate similarities)
         with torch.no_grad():
@@ -184,7 +193,7 @@ class style_detection:
         print("\nComputing similarities...")
         
         # Validate embeddings
-        if self.query_embeddings is None or self.cand_embeddings is None:
+        if not isinstance(self.query_embeddings, torch.Tensor) or not isinstance(self.cand_embeddings, torch.Tensor):
             raise RuntimeError("Embeddings not computed. Run inference for query and candidate first.")
 
         num_queries = self.query_embeddings.shape[0]

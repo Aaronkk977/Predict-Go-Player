@@ -84,7 +84,7 @@ void DataLoader::loadDataFromFile(const std::string& file_name)
     }
     
     std::cerr << "DEBUG: Processed " << sgf_count << " SGF lines, " << success_count << " successful" << std::endl;
-    std::cerr << "DEBUG: Total players in map: " << env_loaders_.size() << std::endl;
+    // std::cerr << "DEBUG: Total players in map: " << env_loaders_.size() << std::endl;
 }
 
 std::vector<float> DataLoader::calculateGameFeatures(int player_num, int game_id, int start, bool is_train)

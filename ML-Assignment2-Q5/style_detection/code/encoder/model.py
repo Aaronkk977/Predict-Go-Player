@@ -107,8 +107,9 @@ class Encoder(nn.Module):
         # FC layers
         embeddings = self.fc(x)
         
-        # L2 normalize embeddings
-        if self.l2_norm:
+        # L2 normalize embeddings (DISABLE during inference if already normalized in similarity computation)
+        # Note: Double normalization can cause numerical issues
+        if self.l2_norm and self.training:
             embeddings = F.normalize(embeddings, p=2, dim=1)
         
         return embeddings
