@@ -11,6 +11,7 @@ int games_per_player = 9;
 int n_frames = 50;
 int move_step_to_choose = 4;
 
+std::string sgf_file_path = "../../data_set/";
 
 void setConfiguration(config::ConfigureLoader& cl)
 {
@@ -20,6 +21,7 @@ void setConfiguration(config::ConfigureLoader& cl)
     cl.addParameter("games_per_player", games_per_player, "", "Strength Detection");
     cl.addParameter("n_frames", n_frames, "", "Strength Detection");
     cl.addParameter("move_step_to_choose", move_step_to_choose, "", "Strength Detection");
+    cl.addParameter("sgf_file_path", sgf_file_path, "", "Strength Detection");
 }
 
 } // namespace strength_detection

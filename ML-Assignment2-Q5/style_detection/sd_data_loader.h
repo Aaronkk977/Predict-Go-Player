@@ -9,6 +9,12 @@
 #include <string>
 #include <vector>
 
+// Shared utility function to parse SGF string into EnvironmentLoader
+// Used by both DataLoader and SDModeHandler
+namespace strength_detection {
+    bool parseSGFToEnvironmentLoader(const std::string& env_string, EnvironmentLoader& env_loader);
+}
+
 class DataLoader {
 public:
     DataLoader(std::string conf_file);

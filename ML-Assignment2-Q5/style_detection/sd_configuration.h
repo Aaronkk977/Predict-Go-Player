@@ -9,6 +9,8 @@ extern int games_per_player;
 extern int n_frames;
 extern int move_step_to_choose;
 
+extern std::string sgf_file_path;
+
 
 
 void setConfiguration(minizero::config::ConfigureLoader& cl);

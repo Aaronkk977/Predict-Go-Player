@@ -14,6 +14,7 @@ public:
 protected:
     void setDefaultConfiguration(minizero::config::ConfigureLoader& cl) override { strength_detection::setConfiguration(cl); }
     void runSGFPolicy();
+    void testSGFLoader();
 
     std::vector<EnvironmentLoader> loadEnvironmentLoaders();
 };

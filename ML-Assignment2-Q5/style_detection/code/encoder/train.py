@@ -13,52 +13,140 @@ import random
 
 
 class MinizeroDataset(IterableDataset):
-    def __init__(self, files, conf_file, game_type):
+    def __init__(self, files, conf_file, game_type, style_py_module):
 
         # Fully implemented dataloader that connects to the C++ side via pybind
         # and retrieves complete features from the backend.
+        # 
+        # IMPORTANT: We do NOT load all files at once to avoid OOM.
+        # Instead, we load files in batches and clear after use.
+        #
+        # NOTE: We receive style_py as parameter to avoid re-loading config
 
-        _temps = __import__(f'build.{game_type}', globals(), locals(), ['style_py'], 0)
-        style_py = _temps.style_py
-        style_py.load_config_file(conf_file)
-
-        self.data_loader = style_py.DataLoader(conf_file)
+        # Use the passed style_py module (already configured)
+        self.style_py = style_py_module
+        self.data_loader = self.style_py.DataLoader(conf_file)
+        
+        self.files = files  # Store file paths, don't load yet
+        self.conf_file = conf_file
+        self.game_type = game_type
+        
         self.player_choosed = 0
-        self.games_per_player = style_py.get_games_per_player()
-        self.players_per_batch = style_py.get_players_per_batch()
-        self.n_frames = style_py.get_n_frames()
+        self.games_per_player = self.style_py.get_games_per_player()
+        self.players_per_batch = self.style_py.get_players_per_batch()
+        self.n_frames = self.style_py.get_n_frames()
         self.training_feature_mode = 2
-        self.input_channel_feature = style_py.get_nn_num_input_channels()
-        self.board_size_h = style_py.get_nn_input_channel_height()
-        self.board_size_w = style_py.get_nn_input_channel_width()
-        for file_name in files:
-            self.data_loader.load_data_from_file(file_name)
-        self.random_player = [i for i in range(self.data_loader.get_num_of_player())]
+        self.input_channel_feature = self.style_py.get_nn_num_input_channels()
+        self.board_size_h = self.style_py.get_nn_input_channel_height()
+        self.board_size_w = self.style_py.get_nn_input_channel_width()
+        
+        # Batch loading parameters
+        self.files_per_batch = 10  # Load 10 SGF files at a time
+        self.current_file_idx = 0
+        self.files_loaded = False
+        
+        print(f"Dataset initialized with {len(self.files)} SGF files")
+        print(f"Config: players_per_batch={self.players_per_batch}, games_per_player={self.games_per_player}, n_frames={self.n_frames}")
+        print(f"Board: {self.board_size_h}x{self.board_size_w}, channels={self.input_channel_feature}")
+        print(f"Will load in batches of {self.files_per_batch} files to save memory")
+        
+    def _load_next_batch(self):
+        """Load next batch of SGF files to avoid OOM"""
+        # CRITICAL: Always clear before loading new batch!
+        # C++ data_loader accumulates data, must clear first
+        if self.files_loaded:
+            print("Clearing previous batch from memory...")
+        self.data_loader.Clear_Sgf()  # Clear regardless of files_loaded state
+        
+        # Get next batch of files
+        if self.current_file_idx + self.files_per_batch <= len(self.files):
+            end_idx = self.current_file_idx + self.files_per_batch
+            batch_files = self.files[self.current_file_idx:end_idx]
+        else:
+            # Wrap around if we reach the end
+            end_idx = min(self.files_per_batch, len(self.files))
+            batch_files = self.files[0:end_idx]
+        
+        print(f"Loading files {self.current_file_idx+1}-{end_idx}/{len(self.files)}...")
+        for file_name in batch_files:
+            try:
+                self.data_loader.load_data_from_file(file_name)
+            except Exception as e:
+                print(f"Warning: Failed to load {file_name}: {e}")
+                continue
+        
+        num_players = self.data_loader.get_num_of_player()
+        if num_players == 0:
+            print("ERROR: No players loaded! Check SGF files.")
+            return
+            
+        self.random_player = [i for i in range(num_players)]
         random.shuffle(self.random_player)
+        self.player_choosed = 0
+        self.files_loaded = True
+        
+        print(f"Loaded {num_players} players from {len(batch_files)} files")
+        
+        # Move to next batch
+        self.current_file_idx = end_idx
+        if self.current_file_idx >= len(self.files):
+            self.current_file_idx = 0  # Loop back
 
     def __iter__(self):
 
         # Each time calling "inputs = next(data_loader_iterator)"
         # will directly get one complete batch of data.
-        # That is, style_py.get_players_per_batch() players,
-        # each player has style_py.get_games_per_player() games,
-        # and each game takes style_py.get_n_frames() moves.
-        # If self.training_feature_mode == 1,
-        # it takes consecutive n_frames moves.
-        # If self.training_feature_mode == 2,
-        # it takes random non-repeating n_frames moves.
-        # Students can directly use mode 2, but mode 1 is also allowed.
+        # 
+        # With batched file loading, we need to check if we need more data
+        # and reload when necessary.
 
         while True:
-            if self.player_choosed == self.players_per_batch:
+            # Load first batch if not loaded yet
+            if not self.files_loaded:
+                self._load_next_batch()
+            
+            # Safety check
+            if len(self.random_player) == 0:
+                print("ERROR: No players available!")
+                break
+            
+            # Check if we need to load next batch
+            if self.player_choosed >= len(self.random_player):
+                print("Finished current batch, loading next...")
+                self._load_next_batch()
+                continue  # Skip this iteration, start fresh with new batch
+            
+            # Reset if we've gone through enough players for this batch
+            if self.player_choosed >= self.players_per_batch:
                 self.player_choosed = 0
                 random.shuffle(self.random_player)
-            if self.training_feature_mode == 1:
-                features = self.data_loader.get_feature_and_label(self.random_player[self.player_choosed], 1, 0, 1)
-            elif self.training_feature_mode == 2:
-                features = self.data_loader.get_random_feature_and_label(self.random_player[self.player_choosed], 1, 0, 1)
-            yield torch.FloatTensor(features).view(1 * self.games_per_player, self.n_frames, self.input_channel_feature, self.board_size_h, self.board_size_w)
-            self.player_choosed = self.player_choosed + 1
+            
+            # Safety check before accessing data
+            player_idx = self.random_player[self.player_choosed]
+            if player_idx >= self.data_loader.get_num_of_player():
+                print(f"Warning: player_idx {player_idx} out of range, resetting...")
+                self.player_choosed = 0
+                continue
+                
+            try:
+                if self.training_feature_mode == 1:
+                    features = self.data_loader.get_feature_and_label(player_idx, 1, 0, 1)
+                elif self.training_feature_mode == 2:
+                    features = self.data_loader.get_random_feature_and_label(player_idx, 1, 0, 1)
+                    
+                yield torch.FloatTensor(features).view(
+                    1 * self.games_per_player, 
+                    self.n_frames, 
+                    self.input_channel_feature, 
+                    self.board_size_h, 
+                    self.board_size_w
+                )
+                self.player_choosed += 1
+                
+            except Exception as e:
+                print(f"Error getting features for player {player_idx}: {e}")
+                self.player_choosed += 1
+                continue
 
 
 def sync(device: torch.device):
@@ -77,17 +165,72 @@ def train(run_id: str, game_type: str, data_dir: str, validate_data_dir: str, mo
     # computation, and optimization steps.
 
     # Import the compiled pybind library for the given game type
-    _temps = __import__(f'build.{game_type}', globals(), locals(), ['style_py'], 0)
-    style_py = _temps.style_py
+    import os
+    build_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..', 'build', game_type))
+    if build_path not in sys.path:
+        sys.path.insert(0, build_path)
+    
+    import style_py
+    
+    # Load config ONCE and show what we loaded
+    print(f"Loading configuration from: {conf_file}")
     style_py.load_config_file(conf_file)
+    
+    # Verify config was loaded correctly
+    print(f"Config verification:")
+    print(f"  - Training steps: {style_py.get_training_step()}")
+    print(f"  - Players per batch: {style_py.get_players_per_batch()}")
+    print(f"  - Games per player: {style_py.get_games_per_player()}")
+    print(f"  - N frames: {style_py.get_n_frames()}")
+    print(f"  - Board size: {style_py.get_nn_input_channel_height()}x{style_py.get_nn_input_channel_width()}")
+    print("")
 
     # Load all SGF files from the training set directory
-    sgf_location = "./train_set"
-    all_file_list = glob.glob(sgf_location)
+    # Try multiple possible locations
+    possible_paths = [
+        "/workspace/data_set/train_set/*.sgf",
+        "../../data_set/train_set/*.sgf",
+        "/tmp2/b12902115/Predict-Go-Player/data_set/train_set/*.sgf"
+    ]
+    
+    all_file_list = []
+    for sgf_location in possible_paths:
+        all_file_list = glob.glob(sgf_location)
+        if len(all_file_list) > 0:
+            print(f"Found SGF files at: {sgf_location}")
+            break
+    
+    if len(all_file_list) == 0:
+        print(f"ERROR: No SGF files found in any of these locations:")
+        for path in possible_paths:
+            print(f"  - {path}")
+        print("\nPlease check the path and make sure training data exists.")
+        return
+    
+    # Limit files for testing/debugging (comment out for full training)
+    # For smoke test, use only a few files
+    if "smoke" in run_id.lower() or style_py.get_training_step() <= 50:
+        all_file_list = all_file_list[:3]  # Only first 3 files for smoke test
+        print(f"SMOKE TEST MODE: Limited to {len(all_file_list)} files")
+    
+    print(f"Total SGF files for training: {len(all_file_list)}")
 
     # Create dataset and dataloader
-    dataset = MinizeroDataset(all_file_list, conf_file, game_type)
-    data_loader = DataLoader(dataset, batch_size=style_py.get_players_per_batch(), num_workers=8)
+    # Pass style_py module to avoid re-loading config
+    dataset = MinizeroDataset(all_file_list, conf_file, game_type, style_py)
+    
+    # Dataset yields one player at a time, DataLoader will batch them
+    # Use default collate_fn which will stack tensors along batch dimension
+    num_workers = 0  # Set to 0 for initial testing to avoid multiprocessing issues
+    
+    data_loader = DataLoader(
+        dataset, 
+        batch_size=style_py.get_players_per_batch(),
+        num_workers=num_workers,
+        persistent_workers=False,  # Only True if num_workers > 0
+        pin_memory=False,  # Can enable if using GPU and stable
+        drop_last=False  # Keep incomplete batches at the end
+    )
     data_loader_iterator = iter(data_loader)
 
     # Setup device (GPU if available)
@@ -109,36 +252,140 @@ def train(run_id: str, game_type: str, data_dir: str, validate_data_dir: str, mo
     board_size_w = style_py.get_nn_input_channel_width()
 
     # Main training loop
-    # This part only demonstrates how to retrieve the input batch
-    # and perform the forward pass.
-    # The full loss computation, backpropagation, optimizer steps,
-    # checkpoint saving, and validation are left to be implemented.
+    # Triplet loss training with anchor, positive, negative samples
+    step = 0
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-4)
+    
+    print(f"Starting training for {style_py.get_training_step()} steps")
+    print(f"Board size: {board_size_h}x{board_size_w}")
+    print(f"Players per batch: {style_py.get_players_per_batch()}")
+    print(f"Games per player: {style_py.get_games_per_player()}")
+    
     while step < style_py.get_training_step():
         step = step + 1
 
-        # Retrieve one batch of input features
-        inputs = next(data_loader_iterator)
+        try:
+            # Retrieve one batch of input features
+            # Shape: (players_per_batch, games_per_player, n_frames, channels, H, W)
+            inputs = next(data_loader_iterator)
 
-        # Reshape input to the expected tensor shape:
-        # [players_per_batch * games_per_player,
-        #  n_frames, num_input_channels, board_H, board_W]
-        inputs = inputs.reshape(
-            style_py.get_players_per_batch() * style_py.get_games_per_player(),
-            style_py.get_n_frames(),
-            style_py.get_nn_num_input_channels(),
-            board_size_h,
-            board_size_w
-        )
+            # Debug: print actual shape for first few steps
+            if step <= 3:
+                print(f"DEBUG Step {step} - Input shape: {inputs.shape}, numel: {inputs.numel()}")
+                print(f"  Expected: [{style_py.get_players_per_batch()}, {style_py.get_games_per_player()}, {style_py.get_n_frames()}, {style_py.get_nn_num_input_channels()}, {board_size_h}, {board_size_w}]")
 
-        # Synchronize device before forward pass (optional utility)
-        sync(device)
+            # Get actual batch size (might be less than players_per_batch)
+            actual_batch_size = inputs.size(0)
+            
+            # Skip if batch is too small for triplet loss
+            if actual_batch_size < 2:
+                print(f"Warning: Batch too small ({actual_batch_size}), skipping...")
+                continue
 
-        # Forward pass through the model
-        output = model(inputs)
+            # Reshape input to the expected tensor shape:
+            # [actual_batch_size * games_per_player,
+            #  n_frames, num_input_channels, board_H, board_W]
+            inputs = inputs.reshape(
+                actual_batch_size * style_py.get_games_per_player(),
+                style_py.get_n_frames(),
+                style_py.get_nn_num_input_channels(),
+                board_size_h,
+                board_size_w
+            ).to(device)
 
-        # Example ends here:
-        # Students should implement their own loss, optimizer, and update logic below.
+            # Synchronize device before forward pass
+            sync(device)
 
-        
+            # Forward pass through the model to get embeddings
+            # Shape: (actual_batch_size * games_per_player, 128)
+            embeddings = model(inputs)
+            
+            # Reshape embeddings back to (actual_batch_size, games_per_player, 128)
+            embeddings = embeddings.view(
+                actual_batch_size,
+                style_py.get_games_per_player(),
+                -1
+            )
+            
+            # Construct triplets for triplet loss
+            # For each player:
+            #   - Anchor: first game
+            #   - Positive: other games from same player
+            #   - Negative: games from different players
+            
+            anchor_list = []
+            positive_list = []
+            negative_list = []
+            
+            for player_idx in range(actual_batch_size):
+                # Anchor: use first game of current player
+                anchor = embeddings[player_idx, 0, :]
+                
+                # Positive: use other games from same player
+                for game_idx in range(1, style_py.get_games_per_player()):
+                    positive = embeddings[player_idx, game_idx, :]
+                    
+                    # Negative: randomly select from different player
+                    neg_player = (player_idx + np.random.randint(1, actual_batch_size)) % actual_batch_size
+                    neg_game = np.random.randint(0, style_py.get_games_per_player())
+                    negative = embeddings[neg_player, neg_game, :]
+                    
+                    anchor_list.append(anchor)
+                    positive_list.append(positive)
+                    negative_list.append(negative)
+            
+            # Stack all triplets
+            anchors = torch.stack(anchor_list)
+            positives = torch.stack(positive_list)
+            negatives = torch.stack(negative_list)
+            
+            # Calculate triplet loss
+            if multi_gpu:
+                loss = model.module.loss(anchors, positives, negatives, margin=1.0)
+            else:
+                loss = model.loss(anchors, positives, negatives, margin=1.0)
+            
+            # Backpropagation
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            
+            # Print progress
+            if step % 10 == 0:
+                print(f"Step {step}/{style_py.get_training_step()}: Loss = {loss.item():.4f}, Batch size = {actual_batch_size}")
+            
+            # Save checkpoint
+            if save_every > 0 and step % save_every == 0:
+                checkpoint_path = models_dir / f"{run_id}_step_{step}.pt"
+                if multi_gpu:
+                    torch.save({
+                        'step': step,
+                        'model_state_dict': model.module.state_dict(),
+                        'optimizer_state_dict': optimizer.state_dict(),
+                        'loss': loss.item(),
+                    }, checkpoint_path)
+                else:
+                    torch.save({
+                        'step': step,
+                        'model_state_dict': model.state_dict(),
+                        'optimizer_state_dict': optimizer.state_dict(),
+                        'loss': loss.item(),
+                    }, checkpoint_path)
+                print(f"Saved checkpoint to {checkpoint_path}")
+                
+        except Exception as e:
+            print(f"Error at step {step}: {e}")
+            import traceback
+            traceback.print_exc()
+            continue
+    
+    # Save final model
+    final_path = models_dir / f"{run_id}_final.pt"
+    if multi_gpu:
+        torch.save(model.module.state_dict(), final_path)
+    else:
+        torch.save(model.state_dict(), final_path)
+    print(f"Training completed! Final model saved to {final_path}")
+
 
 

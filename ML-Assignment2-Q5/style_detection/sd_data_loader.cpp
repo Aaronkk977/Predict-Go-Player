@@ -8,6 +8,32 @@
 #include <fstream>
 #include <iostream>
 
+// Shared utility function to parse SGF string into EnvironmentLoader
+namespace strength_detection {
+    bool parseSGFToEnvironmentLoader(const std::string& env_string, EnvironmentLoader& env_loader)
+    {
+        if (env_string.empty()) { return false; }
+        if (env_string.find("(") == std::string::npos) { return false; }
+
+        minizero::utils::SGFLoader sgf_loader;
+        if (!sgf_loader.loadFromString(env_string)) { return false; }
+        if (std::stoi(sgf_loader.getTags().at("SZ")) != 19) { return false; }
+
+        env_loader.reset();
+        env_loader.addTag("SZ", sgf_loader.getTags().at("SZ"));
+        env_loader.addTag("KM", sgf_loader.getTags().at("KM"));
+        env_loader.addTag("RE", std::to_string(sgf_loader.getTags().at("RE")[0] == 'B' ? 1.0f : -1.0f));
+        env_loader.addTag("PB", sgf_loader.getTags().at("PB"));
+        env_loader.addTag("PW", sgf_loader.getTags().at("PW"));
+
+        for (auto& action_string : sgf_loader.getActions()) {
+            env_loader.addActionPair(Action(action_string.first, std::stoi(sgf_loader.getTags().at("SZ"))), action_string.second);
+        }
+
+        return true;
+    }
+}
+
 DataLoader::DataLoader(std::string conf_file)
 {
     minizero::config::ConfigureLoader cl;
@@ -27,21 +53,8 @@ void DataLoader::loadDataFromFile(const std::string& file_name)
     std::getline(fin, player_name); // The first line in Sgf
 
     for (std::string content; std::getline(fin, content);) {
-        minizero::utils::SGFLoader sgf_loader;
-        if (!sgf_loader.loadFromString(content)) { continue; }
-        if (std::stoi(sgf_loader.getTags().at("SZ")) != 19) { continue; }
-
         EnvironmentLoader env_loader;
-        env_loader.reset();
-        env_loader.addTag("SZ", sgf_loader.getTags().at("SZ"));
-        env_loader.addTag("KM", sgf_loader.getTags().at("KM"));
-        env_loader.addTag("RE", std::to_string(sgf_loader.getTags().at("RE")[0] == 'B' ? 1.0f : -1.0f));
-        env_loader.addTag("PB", sgf_loader.getTags().at("PB"));
-        env_loader.addTag("PW", sgf_loader.getTags().at("PW"));
-
-        for (auto& action_string : sgf_loader.getActions()) {
-            env_loader.addActionPair(Action(action_string.first, std::stoi(sgf_loader.getTags().at("SZ"))), action_string.second);
-        }
+        if (!strength_detection::parseSGFToEnvironmentLoader(content, env_loader)) { continue; }
 
         std::string PB_name = env_loader.getTag("PB");
         std::string PW_name = env_loader.getTag("PW");
@@ -182,9 +195,9 @@ int DataLoader::getNumOfPlayers()
 }
 void DataLoader::clearDataLoader()
 {
-    for (auto it = env_loaders_.begin(); it != env_loaders_.end(); ++it) {
-        env_loaders_[it->first].clear();
-    }
+    // Clear all vectors AND remove all map entries
+    // Previous implementation only cleared vectors, leaving keys in the map
+    env_loaders_.clear();  // This removes all key-value pairs from the map
 }
 
 void DataLoader::checkDataLoader()
@@ -207,21 +220,10 @@ bool SLDataLoaderThread::addEnvironmentLoader()
 {
     std::string env_string = getSharedData()->getNextEnvString();
     if (env_string.empty()) { return false; }
-    if (env_string.find("(") == std::string::npos) { return true; }
-
-    minizero::utils::SGFLoader sgf_loader;
-    if (!sgf_loader.loadFromString(env_string)) { return true; }
-    if (std::stoi(sgf_loader.getTags().at("SZ")) != 19) { return true; }
 
     EnvironmentLoader env_loader;
-    env_loader.reset();
-    env_loader.addTag("SZ", sgf_loader.getTags().at("SZ"));
-    env_loader.addTag("KM", sgf_loader.getTags().at("KM"));
-    env_loader.addTag("RE", std::to_string(sgf_loader.getTags().at("RE")[0] == 'B' ? 1.0f : -1.0f));
-    env_loader.addTag("PB", sgf_loader.getTags().at("PB"));
-    env_loader.addTag("PW", sgf_loader.getTags().at("PW"));
+    if (!strength_detection::parseSGFToEnvironmentLoader(env_string, env_loader)) { return true; }
 
-    for (auto& action_string : sgf_loader.getActions()) { env_loader.addActionPair(Action(action_string.first, std::stoi(sgf_loader.getTags().at("SZ"))), action_string.second); }
     getSharedData()->replay_buffer_.addData(env_loader);
     return true;
 }
